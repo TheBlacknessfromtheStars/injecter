@@ -71,7 +71,6 @@ impl MapInfo {
         })
     }
 
-    #[warn(non_snake_case)]
     pub fn Scan(pid: &str) -> Vec<MapInfo> {
         let mut infos: Vec<MapInfo> = Vec::new();
         let path = format!("/proc/{}/maps", pid);
@@ -127,14 +126,41 @@ pub fn write_proc(pid: pid_t, remote_addr: usize, buf: *mut c_void, len: usize) 
     };
 
     if l == -1 {
-        eprintln!("");
-    } else if (l as isize) < len {
+        eprintln!("写入失败");
+    } else if (l as usize) < len {
         eprintln!("");
     }
 
     l
 }
 
-pub fn read_proc() -> isize {
-    -1
+pub fn read_proc(pid: pid_t, remote_addr: usize, buf: *mut c_void, len: usize) -> isize {
+    let local = libc::iovec {
+        iov_base: buf,
+        iov_len: len,
+    };
+
+    let remote = libc::iovec {
+        iov_base: remote_addr as *mut c_void,
+        iov_len: len,
+    };
+
+    let l = unsafe {
+        libc::process_vm_readv(
+            pid,
+            &local as *const libc::iovec,
+            1,
+            &remote as *const libc::iovec,
+            1,
+            0,
+        )
+    };
+
+    if l == -1 {
+        eprintln!("读取失败");
+    } else if (l as usize) < len {
+        eprintln!("");
+    }
+
+    l
 }
