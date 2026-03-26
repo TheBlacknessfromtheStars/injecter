@@ -1,11 +1,11 @@
-use libc::{iovec, pid_t};
 use std::{
+    ffi::{CStr, CString},
     fs::File,
     io::{BufRead, BufReader},
     os::raw::c_void,
 };
 
-use libc;
+use libc::pid_t;
 
 #[derive(Debug)]
 pub struct MapInfo {
@@ -103,6 +103,65 @@ impl MapInfo {
     }
 }
 
+pub fn switch_mnt_ns(pid: pid_t, fd: *mut i32) -> bool {
+    let mut nsfd = -1;
+    let mut old_nsfd = -1;
+    let mut path = String::new();
+
+    if pid == 0 {
+        if fd.is_null() {
+            unsafe {
+                nsfd = *fd;
+                *fd = -1;
+            }
+        } else {
+            return false;
+        }
+        path += "/proc/self/fd/";
+        path += &nsfd.to_string();
+    } else {
+        if !fd.is_null() {
+            old_nsfd = unsafe {
+                libc::open(
+                    CString::new("/proc/self/ns/mnt").unwrap().as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC,
+                )
+            };
+            if old_nsfd == -1 {
+                tklog::error!("failed with ", unsafe { *libc::__errno() }, " get old nsfd");
+                return false;
+            }
+            unsafe { *fd = old_nsfd };
+        }
+        path = format!("/proc/{}/ns/mnt", pid);
+        nsfd = unsafe {
+            libc::open(
+                CString::new(path.clone()).unwrap().as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            )
+        };
+        if nsfd == -1 {
+            unsafe {
+                tklog::error!("failed with ", *libc::__errno(), " open nsfd ", path);
+                libc::close(old_nsfd);
+                return false;
+            }
+        }
+    }
+
+    unsafe {
+        if libc::setns(nsfd, libc::CLONE_NEWNS) == -1 {
+            tklog::error!("failed with ", *libc::__errno(), " set ns to ", path);
+            libc::close(nsfd);
+            libc::close(old_nsfd);
+            return false;
+        }
+        libc::close(nsfd);
+    }
+
+    true
+}
+
 pub fn write_proc(pid: pid_t, remote_addr: usize, buf: *mut c_void, len: usize) -> isize {
     let local = libc::iovec {
         iov_base: buf,
@@ -163,4 +222,24 @@ pub fn read_proc(pid: pid_t, remote_addr: usize, buf: *mut c_void, len: usize) -
     }
 
     l
+}
+
+pub fn find_module_return_addr(maps: &Vec<MapInfo>, suffix: &str) -> usize {
+    for map in maps {
+        if (map.perms & libc::PROT_EXEC) == 0 && map.path.ends_with(suffix) {
+            return map.start;
+        }
+    }
+
+    0
+}
+
+pub fn find_module_base(maps: &Vec<MapInfo>, suffix: &str) -> usize {
+    for map in maps {
+        if map.offset == 0 && map.path.ends_with(suffix) {
+            return map.start;
+        }
+    }
+
+    0
 }
